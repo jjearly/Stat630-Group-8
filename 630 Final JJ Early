@@ -1,0 +1,339 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(ISLR)
+library(glmnet)
+library(pls)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(leaps)
+library(class)
+```
+
+# Data
+
+```{r}
+spotify <- read.csv("Spotify Kaggle Dataset.csv")
+#Exclude unwanted variables
+spotify <- spotify %>% 
+  select(-c(type, id, uri, track_href, analysis_url, song_name, Unnamed..0, title))
+```
+
+```{r}
+spotify$time_signature <- factor(spotify$time_signature)
+spotify$mode <- factor(spotify$mode)
+spotify$key <- factor(spotify$key)
+
+spotify_data <- sample_n(spotify, size = 10000)
+```
+
+```{r}
+#Set seed
+set.seed(887)
+
+#Split data into training and test sets
+split <- createDataPartition(y = spotify_data$tempo, p = 0.9, list = FALSE)
+training_set <- spotify_data[split, ]
+test_set <- spotify_data[-split, ]
+```
+# Exploratory Data Analysis
+
+### Pairwise Plots
+
+```{r}
+numeric_training_set <- training_set
+numeric_training_set$key <- as.numeric(as.character(numeric_training_set$key))
+numeric_training_set$mode <- as.numeric(as.character(numeric_training_set$mode))
+numeric_training_set$time_signature <- as.numeric(as.character(numeric_training_set$time_signature))
+numeric_training_set <- Filter(is.numeric, numeric_training_set)
+```
+
+```{r}
+#Filter training set to numeric data
+pairs(numeric_training_set)
+```
+
+# Quantitative Outcomes
+
+
+```{r}
+#Marginal Simple Linear Regressions for each predictor with 'danceability'
+print(names(training_set))
+```
+```{r}
+predictor_vars <- setdiff(names(training_set), "danceability")  #All predictor names excluding 'tempo'
+models <- list()
+
+for (var in predictor_vars) {
+  formula <- as.formula(paste("danceability ~", var))
+  models[[var]] <- lm(formula, data = training_set)
+}
+
+#Display summary of one example model by variable name
+for (var in names(models)) {
+  print(paste("Summary with predictor:", var))
+  print(summary(models[[var]]))
+}
+```
+```{r}
+model <- lm(danceability ~ liveness, data = training_set)
+summary(model)
+```
+
+Energy
+Model: danceability ~ energy
+Intercept: 0.8555 (highly significant)
+Coefficient for Energy: -0.2847, indicating that danceability decreases as energy increases.
+Significance: Extremely significant with a very low p-value.
+Adjusted R-squared: 0.1083, suggesting that approximately 10.83% of the variability in danceability is explained by energy.
+
+Key
+Model: danceability ~ key
+Intercept: 0.6415 (highly significant)
+Coefficients for Key: Vary across different keys, with some positive and some negative effects.
+Significance: Varies by key, with some statistically significant and others not.
+Adjusted R-squared: 0.01162, indicating very low explanatory power.
+
+Loudness
+Model: danceability ~ loudness
+Intercept: 0.5637 (highly significant)
+Coefficient for Loudness: -0.0115, suggesting a small decrease in danceability with increased loudness.
+Significance: Extremely significant.
+Adjusted R-squared: 0.04601, indicating low explanatory power.
+
+Mode
+Model: danceability ~ mode
+Intercept: 0.6258 (highly significant)
+Coefficient for Mode1: 0.0237, indicating a slight increase in danceability for mode 1.
+Significance: Extremely significant.
+Adjusted R-squared: 0.005463, showing minimal explanatory power.
+
+Speechiness
+Model: danceability ~ speechiness
+Intercept: 0.6040 (highly significant)
+Coefficient for Speechiness: 0.2572, indicating that danceability increases as speechiness increases.
+Significance: Extremely significant.
+Adjusted R-squared: 0.03998, reflecting low explanatory power.
+
+Acousticness
+Model: danceability ~ acousticness
+Intercept: 0.6318 (highly significant)
+Coefficient for Acousticness: 0.0719, suggesting an increase in danceability with higher acousticness.
+Significance: Extremely significant.
+Adjusted R-squared: 0.006081, very low explanatory power.
+
+Instrumentalness
+Model: danceability ~ instrumentalness
+Intercept: 0.6457 (highly significant)
+Coefficient for Instrumentalness: -0.0243, indicating a decrease in danceability with higher instrumentalness.
+Significance: Extremely significant.
+Adjusted R-squared: 0.003159, very low explanatory power.
+
+Liveness
+Model: danceability ~ liveness
+Intercept: 0.6741 (highly significant)
+Coefficient for Liveness: -0.1624, suggesting that danceability decreases as liveness increases.
+Significance: Extremely significant.
+Adjusted R-squared: 0.03329, low explanatory power.
+
+Valence
+Model: danceability ~ valence
+Intercept: 0.5497 (highly significant)
+Coefficient for Valence: 0.2495, indicating that danceability increases as valence increases.
+Significance: Extremely significant.
+Adjusted R-squared: 0.1349, which is relatively higher than most other variables.
+
+Tempo
+Model: danceability ~ tempo
+Intercept: 0.7874 (highly significant)
+Coefficient for Tempo: -0.0010, suggesting a slight decrease in danceability as tempo increases.
+Significance: Extremely significant.
+Adjusted R-squared: 0.02369, indicating low explanatory power.
+Duration (ms)
+
+Model: danceability ~ duration_ms
+Intercept: 0.6590 (highly significant)
+Coefficient for Duration_ms: -8.025e-08, indicating a very slight decrease in danceability as song duration increases.
+Significance: Extremely significant.
+Adjusted R-squared: 0.002668, very low explanatory power.
+
+Time Signature
+Model: danceability ~ time_signature
+Intercept: 0.5022 (highly significant)
+Coefficients for Time Signature: Varied effects with some levels showing statistical significance.
+Significance: Varies; some levels are statistically significant.
+Adjusted R-squared: 0.01294, very low explanatory power.
+Genre
+
+Model: danceability ~ genre
+Intercept: 0.6234 (highly significant)
+Coefficients for Genre: Differ significantly across genres, with some increasing and others decreasing danceability.
+Significance: Most genres show significant effects.
+Adjusted R-squared: 0.371, indicating substantial explanatory power relative to other models.
+
+### Multiple linear regression
+
+```{r}
+#Initial model
+simple_model <- lm(danceability ~ energy + key + mode + liveness + loudness + speechiness + acousticness +
+            instrumentalness + duration_ms + tempo + valence + genre + time_signature,
+            data = spotify_data)
+
+summary(simple_model)
+```
+
+```{r}
+# Transformations
+training_set_complex <- training_set %>%
+  mutate(
+    log_loudness = log(-loudness +1),  # Adding 1 to avoid log(0)
+    sqrt_duration_ms = sqrt(duration_ms),
+    interaction_energy_loudness = energy * loudness,
+    interaction_tempo_liveness = tempo * liveness
+  )
+
+# Updated model with transformations and interactions
+complex_model <- lm(danceability ~ energy + key + mode + liveness + log_loudness + speechiness +
+                    acousticness + instrumentalness + sqrt_duration_ms + tempo + valence + genre +
+                    time_signature + interaction_energy_loudness + interaction_tempo_liveness,
+                    data = training_set_complex)
+
+# Summary of the complex model
+summary(complex_model)
+```
+Logarithmic Transformation of Loudness: This transformation helps in stabilizing variance and normalizing the distribution, making the relationship with danceability more linear and potentially improving model fit.
+
+By reducing the scale of variation in song duration, this transformation can help in handling outliers and extreme values, providing a more uniform influence on the model.
+
+Interaction between Energy and Loudness: This interaction term tests the hypothesis that the effect of energy on danceability varies with different loudness levels.
+
+Interaction between Tempo and Valence: This term explores how the combination of tempo and emotional content (valence) synergistically affects danceability.
+
+# Variable Selection
+
+### Best Subset
+
+```{r}
+subset_selection <- regsubsets(danceability ~ ., data=training_set, nbest=1, really.big=TRUE, nvmax = 25)
+subset_summary <- summary(subset_selection)
+subset_summary
+```
+
+```{r}
+#Plotting the results
+plot(subset_summary$rss, xlab="Number of Variables", ylab="RSS", type="l", main="RSS vs. Number of Variables")
+plot(subset_summary$adjr2, xlab="Number of Variables", ylab="Adjusted R^2", type="l", main="Adjusted R^2 vs. Number of Variables")
+plot(subset_summary$cp, xlab="Number of Variables", ylab="Cp", type="l", main="Cp vs. Number of Variables")
+plot(subset_summary$bic, xlab="Number of Variables", ylab="BIC", type="l", main="BIC vs. Number of Variables")
+
+best_model_index <- which.min(subset_summary$cp)
+best_model <- subset_summary$which[best_model_index, ]
+best_model_vars <- names(which(best_model == TRUE))
+
+#Print best model variables
+print(paste("Best model includes variables:", paste(best_model_vars, collapse=", ")))
+best_model_index <- which.min(subset_summary$bic)
+cat("Best number of variables (Best Subset Selection):", best_model_index, "\n")
+```
+
+### Forward stepwise selection
+```{r}
+formula <- danceability ~ .
+
+#Forward Stepwise Selection
+forward_stepwise_model <- regsubsets(formula, data=training_set, nbest=1, really.big=TRUE, ,nvmax = 25, method="forward")
+forward_summary <- summary(forward_stepwise_model)
+
+#Plotting the results
+plot(forward_summary$cp, xlab="Number of Variables", ylab="Mallows' Cp", type="l", main="Forward Stepwise: Mallows' Cp")
+plot(forward_summary$bic, xlab="Number of Variables", ylab="BIC", type="l", main="Forward Stepwise: BIC")
+
+best_model_forward_index <- which.min(forward_summary$bic)
+cat("Best number of variables (Forward):", best_model_forward_index, "\n")
+```
+
+
+### Backward Stepwise Selection
+
+```{r}
+backward_stepwise_model <- regsubsets(formula, data=training_set, nbest=1, really.big=TRUE, nvmax = 25, method="backward")
+backward_summary <- summary(backward_stepwise_model)
+
+#Plotting the results
+plot(backward_summary$cp, xlab="Number of Variables", ylab="Mallows' Cp", type="l", main="Backward Stepwise: Mallows' Cp")
+plot(backward_summary$bic, xlab="Number of Variables", ylab="BIC", type="l", main="Backward Stepwise: BIC")
+
+#Identify best models by number of predictors based on BIC
+best_model_backward_index <- which.min(backward_summary$bic)
+cat("Best number of variables (Backward):", best_model_backward_index, "\n")
+```
+
+### Ridge Regression
+
+```{r}
+x_train <- model.matrix(danceability ~ ., data = training_set)[, -1]
+y_train <- training_set$danceability
+x_test <- model.matrix(danceability ~ ., data = test_set)[, -1]
+y_test <- test_set$danceability
+```
+
+```{r}
+# Ridge regression with 10-fold CV to find optimal lambda
+cv_ridge <- cv.glmnet(
+  x_train,
+  y_train,
+  alpha = 0,  # Alpha = 0 for Ridge regression
+  type.measure = "mse",
+  nfolds = 10
+)
+
+optimal_lambda_ridge <- cv_ridge$lambda.min
+predictions_ridge <- predict(cv_ridge, s = optimal_lambda_ridge, newx = x_test)
+mse_test_ridge <- mean((y_test - predictions_ridge)^2)
+
+print(paste("MSE for Ridge Regression:", mse_test_ridge))
+print(paste("Optimal Lambda for Ridge:", optimal_lambda_ridge))
+```
+
+### Lasso
+
+```{r}
+cv_lasso <- cv.glmnet(
+  x_train,
+  y_train,
+  alpha = 1,  # Alpha = 1 for Lasso regression
+  type.measure = "mse",
+  nfolds = 10
+)
+
+optimal_lambda_lasso <- cv_lasso$lambda.min
+predictions_lasso <- predict(cv_lasso, s = optimal_lambda_lasso, newx = x_test)
+mse_test_lasso <- mean((y_test - predictions_lasso)^2)
+
+print(paste("MSE for Lasso Regression:", mse_test_lasso))
+print(paste("Optimal Lambda for Lasso:", optimal_lambda_lasso))
+```
+
+### PCR
+
+```{r}
+model_pcr <- pcr(tempo ~ ., data = training_set, scale = TRUE, validation = "CV")
+
+# Summary of cross-validation results
+validation_summary <- summary(model_pcr)
+print(validation_summary$validation)
+
+# Extracting and plotting MSE for each number of components
+model_pcr_mse <- MSEP(model_pcr, estimate = "CV")$val %>%
+  as_tibble() %>%
+  pivot_longer(everything(), names_to = "Components", values_to = "CV_MSE") %>%
+  mutate(Components = as.integer(row_number() - 1)) %>%
+  select(Components, CV_MSE)
+
+print(model_pcr_mse)
+```
