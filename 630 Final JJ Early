@@ -1,3 +1,10 @@
+---
+title: "Stat 630 Final"
+author: "JJ Early"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -13,6 +20,12 @@ library(tidyr)
 library(caret)
 library(leaps)
 library(class)
+library(glmnet)
+library(boot)
+library(tree)
+library(randomForest)
+library(gbm)
+library(keras)
 ```
 
 # Data
@@ -28,19 +41,22 @@ spotify <- spotify %>%
 spotify$time_signature <- factor(spotify$time_signature)
 spotify$mode <- factor(spotify$mode)
 spotify$key <- factor(spotify$key)
-
-spotify_data <- sample_n(spotify, size = 10000)
+spotify$genre <- factor(spotify$genre)
 ```
 
 ```{r}
 #Set seed
 set.seed(887)
+spotify_data <- sample_n(spotify, size = 10000)
+n <- nrow(spotify_data)
 
-#Split data into training and test sets
-split <- createDataPartition(y = spotify_data$tempo, p = 0.9, list = FALSE)
-training_set <- spotify_data[split, ]
-test_set <- spotify_data[-split, ]
+# Create indices for the training and test sets
+train_idx <- sample(n, floor(0.9 * n), replace = FALSE)
+test_idx <- setdiff(1:n, train_idx)
+training_set <- spotify_data[train_idx, ]
+test_set <- spotify_data[test_idx, ]
 ```
+
 # Exploratory Data Analysis
 
 ### Pairwise Plots
@@ -50,23 +66,55 @@ numeric_training_set <- training_set
 numeric_training_set$key <- as.numeric(as.character(numeric_training_set$key))
 numeric_training_set$mode <- as.numeric(as.character(numeric_training_set$mode))
 numeric_training_set$time_signature <- as.numeric(as.character(numeric_training_set$time_signature))
-numeric_training_set <- Filter(is.numeric, numeric_training_set)
+numeric_training_set_only <- Filter(is.numeric, numeric_training_set)
 ```
 
 ```{r}
 #Filter training set to numeric data
-pairs(numeric_training_set)
+pairs(numeric_training_set_only, cex = 0.01)
 ```
+
+
+```{r}
+ggplot(numeric_training_set_only, aes(x = loudness, y = energy)) +
+  geom_point(alpha = 0.5, color = "blue", size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Scatter Plot of Loudness vs Energy",
+       x = "Loudness",
+       y = "Energy") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(numeric_training_set_only, aes(x = duration_ms, y = speechiness)) +
+  geom_point(alpha = 0.5, color = "blue", size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Scatter Plot of Durations (MS) vs Speechiness",
+       x = "Duration",
+       y = "Speechiness") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(numeric_training_set_only, aes(x = instrumentalness, y = liveness)) +
+  geom_point(alpha = 0.5, color = "blue", size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Scatter Plot of Instrumentalness) vs Liveness",
+       x = "Instrumentalness",
+       y = "Liveness") +
+  theme_minimal()
+```
+
 
 # Quantitative Outcomes
 
 
 ```{r}
 #Marginal Simple Linear Regressions for each predictor with 'danceability'
-print(names(training_set))
+print(names(numeric_training_set))
 ```
 ```{r}
-predictor_vars <- setdiff(names(training_set), "danceability")  #All predictor names excluding 'tempo'
+predictor_vars <- setdiff(names(numeric_training_set), "danceability")  #All predictor names excluding 'tempo'
 models <- list()
 
 for (var in predictor_vars) {
@@ -80,139 +128,497 @@ for (var in names(models)) {
   print(summary(models[[var]]))
 }
 ```
-```{r}
-model <- lm(danceability ~ liveness, data = training_set)
-summary(model)
-```
 
-Energy
-Model: danceability ~ energy
-Intercept: 0.8555 (highly significant)
-Coefficient for Energy: -0.2847, indicating that danceability decreases as energy increases.
-Significance: Extremely significant with a very low p-value.
-Adjusted R-squared: 0.1083, suggesting that approximately 10.83% of the variability in danceability is explained by energy.
 
-Key
-Model: danceability ~ key
-Intercept: 0.6415 (highly significant)
-Coefficients for Key: Vary across different keys, with some positive and some negative effects.
-Significance: Varies by key, with some statistically significant and others not.
-Adjusted R-squared: 0.01162, indicating very low explanatory power.
+Energy Model:
+Formula: danceability ~ energy
+Intercept: 0.8433 (highly significant)
+Coefficient for Energy: -0.2677, indicating a decrease in danceability as energy increases.
+Significance: Extremely significant (p-value < 2.2e-16)
+Adjusted R-squared: 0.0981, suggesting that about 9.81% of the variability in danceability is explained by energy.
 
-Loudness
-Model: danceability ~ loudness
-Intercept: 0.5637 (highly significant)
-Coefficient for Loudness: -0.0115, suggesting a small decrease in danceability with increased loudness.
+Key Model:
+Formula: danceability ~ key
+Intercept: 0.6467 (highly significant)
+Coefficients for Key: Effects vary by key, some positive, some negative, with varying levels of statistical significance.
+Adjusted R-squared: 0.009975, indicating low explanatory power.
+
+Loudness Model:
+Formula: danceability ~ loudness
+Intercept: 0.5627 (highly significant)
+Coefficient for Loudness: -0.0118, suggesting a small decrease in danceability with increased loudness.
 Significance: Extremely significant.
-Adjusted R-squared: 0.04601, indicating low explanatory power.
+Adjusted R-squared: 0.0497, reflecting low explanatory power.
 
-Mode
-Model: danceability ~ mode
-Intercept: 0.6258 (highly significant)
-Coefficient for Mode1: 0.0237, indicating a slight increase in danceability for mode 1.
+
+Mode Model:
+Formula: danceability ~ mode
+Intercept: 0.6256 (highly significant)
+Coefficient for Mode1: 0.0247, indicating a slight increase in danceability for mode 1.
 Significance: Extremely significant.
-Adjusted R-squared: 0.005463, showing minimal explanatory power.
+Adjusted R-squared: 0.006064, very low explanatory power.
 
-Speechiness
-Model: danceability ~ speechiness
-Intercept: 0.6040 (highly significant)
-Coefficient for Speechiness: 0.2572, indicating that danceability increases as speechiness increases.
+Speechiness Model:
+Formula: danceability ~ speechiness
+Intercept: 0.6078 (highly significant)
+Coefficient for Speechiness: 0.2297, indicating that danceability increases as speechiness increases.
 Significance: Extremely significant.
-Adjusted R-squared: 0.03998, reflecting low explanatory power.
+Adjusted R-squared: 0.03436, low explanatory power.
 
-Acousticness
-Model: danceability ~ acousticness
-Intercept: 0.6318 (highly significant)
-Coefficient for Acousticness: 0.0719, suggesting an increase in danceability with higher acousticness.
+Acousticness Model:
+Formula: danceability ~ acousticness
+Intercept: 0.6325 (highly significant)
+Coefficient for Acousticness: 0.0690, suggesting an increase in danceability with higher acousticness.
 Significance: Extremely significant.
-Adjusted R-squared: 0.006081, very low explanatory power.
+Adjusted R-squared: 0.005786, very low explanatory power.
 
-Instrumentalness
-Model: danceability ~ instrumentalness
-Intercept: 0.6457 (highly significant)
-Coefficient for Instrumentalness: -0.0243, indicating a decrease in danceability with higher instrumentalness.
+Instrumentalness Model:
+Formula: danceability ~ instrumentalness
+Intercept: 0.6459 (highly significant)
+Coefficient for Instrumentalness: -0.0237, indicating a decrease in danceability with higher instrumentalness.
 Significance: Extremely significant.
-Adjusted R-squared: 0.003159, very low explanatory power.
+Adjusted R-squared: 0.003075, very low explanatory power.
 
-Liveness
-Model: danceability ~ liveness
-Intercept: 0.6741 (highly significant)
-Coefficient for Liveness: -0.1624, suggesting that danceability decreases as liveness increases.
+Liveness Model:
+Formula: danceability ~ liveness
+Intercept: 0.6759 (highly significant)
+Coefficient for Liveness: -0.1713, suggesting that danceability decreases as liveness increases.
 Significance: Extremely significant.
-Adjusted R-squared: 0.03329, low explanatory power.
+Adjusted R-squared: 0.0374, low explanatory power.
 
-Valence
-Model: danceability ~ valence
-Intercept: 0.5497 (highly significant)
-Coefficient for Valence: 0.2495, indicating that danceability increases as valence increases.
+Valence Model:
+Formula: danceability ~ valence
+Intercept: 0.5526 (highly significant)
+Coefficient for Valence: 0.2441, indicating that danceability increases as valence increases.
 Significance: Extremely significant.
-Adjusted R-squared: 0.1349, which is relatively higher than most other variables.
+Adjusted R-squared: 0.1325, higher explanatory power compared to most other variables.
 
-Tempo
-Model: danceability ~ tempo
-Intercept: 0.7874 (highly significant)
-Coefficient for Tempo: -0.0010, suggesting a slight decrease in danceability as tempo increases.
+Tempo Model:
+Formula: danceability ~ tempo
+Intercept: 0.8156 (highly significant)
+Coefficient for Tempo: -0.0012, suggesting a slight decrease in danceability as tempo increases.
 Significance: Extremely significant.
-Adjusted R-squared: 0.02369, indicating low explanatory power.
-Duration (ms)
+Adjusted R-squared: 0.03386, low explanatory power.
 
-Model: danceability ~ duration_ms
-Intercept: 0.6590 (highly significant)
-Coefficient for Duration_ms: -8.025e-08, indicating a very slight decrease in danceability as song duration increases.
+Duration Model:
+Formula: danceability ~ duration_ms
+Intercept: 0.6527 (highly significant)
+Coefficient for Duration_ms: -5.399e-08, indicating a very slight decrease in danceability as song duration increases.
 Significance: Extremely significant.
-Adjusted R-squared: 0.002668, very low explanatory power.
+Adjusted R-squared: 0.001158, very low explanatory power.
 
-Time Signature
-Model: danceability ~ time_signature
-Intercept: 0.5022 (highly significant)
-Coefficients for Time Signature: Varied effects with some levels showing statistical significance.
-Significance: Varies; some levels are statistically significant.
-Adjusted R-squared: 0.01294, very low explanatory power.
-Genre
+Time Signature Model:
+Formula: danceability ~ time_signature
+Intercept: 0.5483 (highly significant)
+Coefficients for Time Signature: Varied effects, some levels showing statistical significance.
+Adjusted R-squared: 0.009721, very low explanatory power.
 
-Model: danceability ~ genre
-Intercept: 0.6234 (highly significant)
+Genre Model:
+Formula: danceability ~ genre
+Intercept: 0.6151 (highly significant)
 Coefficients for Genre: Differ significantly across genres, with some increasing and others decreasing danceability.
 Significance: Most genres show significant effects.
-Adjusted R-squared: 0.371, indicating substantial explanatory power relative to other models.
+Adjusted R-squared: 0.3736, indicating substantial explanatory power relative to other models.
 
 ### Multiple linear regression
 
 ```{r}
 #Initial model
 simple_model <- lm(danceability ~ energy + key + mode + liveness + loudness + speechiness + acousticness +
-            instrumentalness + duration_ms + tempo + valence + genre + time_signature,
-            data = spotify_data)
+             instrumentalness + duration_ms + tempo + valence + genre + time_signature,
+            data = training_set)
 
 summary(simple_model)
 ```
 
 ```{r}
-# Transformations
-training_set_complex <- training_set %>%
-  mutate(
-    log_loudness = log(-loudness +1),  # Adding 1 to avoid log(0)
-    sqrt_duration_ms = sqrt(duration_ms),
-    interaction_energy_loudness = energy * loudness,
-    interaction_tempo_liveness = tempo * liveness
-  )
+#Perform 10-fold cross-validation
+n_train <- nrow(training_set)
+k <- 10
+kvals <- unique(round(n_train/(1L:floor(n_train/2))))
+temp <- abs(kvals - k)
+if (!any(temp == 0)) {
+  k <- kvals[which.min(temp)]
+  warning(sprintf("'k' has been set to %d", k))
+}
+f <- ceiling(n_train / k)
 
-# Updated model with transformations and interactions
-complex_model <- lm(danceability ~ energy + key + mode + liveness + log_loudness + speechiness +
-                    acousticness + instrumentalness + sqrt_duration_ms + tempo + valence + genre +
-                    time_signature + interaction_energy_loudness + interaction_tempo_liveness,
-                    data = training_set_complex)
+#Initialize data structure for storing results
+MSE_k_fold <- tibble(fold = rep(1:k, each = f), ERR_i = NA_real_)
 
-# Summary of the complex model
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+
+#Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(simple_model, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+#Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+#Predict on the test set
+predictions <- predict(simple_model, newdata = test_set)
+
+#Calculate the MSE on the test set
+test_mse <- mean((test_set$danceability - predictions)^2)
+print(paste("Test Set MSE:", test_mse))
+```
+
+
+
+```{r}
+#Updated model with transformations and interactions
+complex_model <- lm(danceability ~ energy + key + mode + liveness + loudness + speechiness +
+                    acousticness + instrumentalness + sqrt(duration_ms) + tempo + valence + genre +
+                    time_signature + acousticness:instrumentalness + energy:loudness,
+                    data = training_set)
+
+#Summary of the complex model
 summary(complex_model)
 ```
-Logarithmic Transformation of Loudness: This transformation helps in stabilizing variance and normalizing the distribution, making the relationship with danceability more linear and potentially improving model fit.
+
 
 By reducing the scale of variation in song duration, this transformation can help in handling outliers and extreme values, providing a more uniform influence on the model.
 
 Interaction between Energy and Loudness: This interaction term tests the hypothesis that the effect of energy on danceability varies with different loudness levels.
 
-Interaction between Tempo and Valence: This term explores how the combination of tempo and emotional content (valence) synergistically affects danceability.
+Interaction between acousticness and instrumentalness: the effect of acousticness might depend on whether a track is instrumental.
+
+```{r}
+#Perform k-fold CV
+# Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(complex_model, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+# Predictions on the test set
+predictions_test <- predict(complex_model, newdata = test_set)
+# Calculate MSE
+mse_test_set <- mean((test_set$danceability - predictions_test) ^ 2)
+
+# Print the MSE
+print(paste("Mean Squared Error on the Test Set:", mse_test_set))
+```
+
+### Regression Tree (With Pruning)
+
+```{r}
+reg_tree <- tree(danceability ~ ., data = training_set)
+plot(reg_tree, main="Regression Tree for Danceability", type="uniform")
+text(reg_tree, pretty=0, cex=0.8)
+```
+
+```{r}
+cv_reg_tree <- cv.tree(reg_tree, FUN=prune.tree)
+plot(cv_reg_tree$size, cv_reg_tree$dev, type="b", xlab="Size of the Tree", ylab="Cross-Validated Deviance")
+```
+
+```{r}
+# Prune the tree using the optimal size
+optimal_size <- which.min(cv_reg_tree$dev)
+optimal_size
+pruned_tree <- prune.tree(reg_tree, best= optimal_size+1) #Add 1 as the optimal size is too strict
+plot(pruned_tree, main="Pruned Regression Tree for Danceability")
+text(pruned_tree, pretty=0, cex=0.8)
+```
+
+```{r}
+#Perform 10-fold cross-validation for the regression tree
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(reg_tree, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+#Perform 10-fold cross-validation for the pruned regression tree
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(pruned_tree, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+predictions_reg <- predict(reg_tree, newdata = test_set)
+predictions_pruned <- predict(pruned_tree, newdata = test_set)
+mse_reg_test <- mean((test_set$danceability - predictions_reg)^2)
+mse_pruned_test <- mean((test_set$danceability - predictions_pruned)^2)
+print(paste("Test MSE for Regular Tree:", mse_reg_test))
+print(paste("Test MSE for Pruned Tree:", mse_pruned_test))
+```
+
+### Bagging
+
+```{r}
+#Random forest without selecting variables at random will yield bagging:
+(p <- ncol(spotify_data) - 1)
+```
+
+```{r}
+bag_tree <- 
+  randomForest(
+    danceability ~ ., 
+    data = training_set,
+    mtry = sqrt(p), 
+    importance = TRUE,
+    do.trace = 100  # Provides updates every 100 trees
+    )
+```
+
+```{r}
+importance(bag_tree)
+```
+
+```{r}
+#Perform 10-fold cross-validation for the pruned regression tree
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(bag_tree, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+pred_test_bagging <- predict(bag_tree, newdata = test_set)
+MSE_test_bagging <- mean((pred_test_bagging - test_set$danceability)^2 )
+print(paste("Bagging Test MSE:", MSE_test_bagging))
+```
+
+### Random Forest
+
+```{r}
+MSE_test_rf <- numeric(p)
+for (m in 1:p) {
+  rf_tree <- 
+    randomForest(
+      danceability ~ ., 
+      data = training_set,
+      mtry = m, 
+      importance = TRUE
+      )
+  
+  # Show two most important variables:
+  print(names(sort(importance(rf_tree)[ , 2], decreasing = TRUE)[1:2]))
+}
+```
+
+```{r}
+summary(rf_tree)
+importance(rf_tree)
+```
+
+```{r}
+#Perform 10-fold cross-validation for rf tree
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(rf_tree, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+pred_test_rf <- predict(rf_tree, newdata = test_set)
+MSE_test_rf <- mean((pred_test_rf - test_set$danceability)^2 )
+print(paste("RF Test MSE:", MSE_test_rf))
+```
+### Boosting
+
+```{r}
+#Selecting tuning parameters
+grid <- expand.grid(
+  n.trees = c(1000, 500, 2000),
+  interaction.depth = c(1, 2, 3),
+  shrinkage = c(0.01, 0.05, 0.1),
+  n.minobsinnode = c(10, 20)
+)
+
+train_control <- trainControl(method = "cv", number = 5)  # using 10-fold CV
+
+model <- train(
+  danceability ~ ., 
+  data = training_set,
+  method = "gbm",
+  trControl = train_control,
+  tuneGrid = grid,
+  verbose = FALSE
+)
+
+print(model$bestTune)
+```
+
+```{r}
+n.trees = 2000
+interaction.depth = 3
+shrinkage = 0.1
+
+#First GBM Model
+boost_gbm <- gbm(
+  danceability ~ ., 
+  data = training_set, 
+  n.trees = n.trees, 
+  interaction.depth = interaction.depth, 
+  shrinkage = shrinkage,
+)
+
+summary(boost_gbm)
+```
+
+```{r}
+#Perform 10-fold cross-validation for Boosting
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+  current_train_folds <- training_set %>% filter(fold != fld)
+  current_test_fold <- training_set %>% filter(fold == fld)
+
+  predictions <- predict(boost_gbm, newdata = current_test_fold)
+  MSE_k_fold$ERR_i[MSE_k_fold$fold == fld] <- mean((current_test_fold$danceability - predictions) ^ 2)
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
+# Predict on test set and calculate Mean Squared Error (MSE) for each iteration
+predicted_values <- predict(boost_gbm, newdata = test_set, n.trees = n.trees)
+mse_gbm <- mean((predicted_values - test_set$danceability)^2)
+print(paste("MSE for GBM Model with depth 3", ":", mse_gbm))
+```
+### Neural Network
+
+```{r}
+n <- nrow(spotify_data)
+spotify_data_nn <- spotify_data
+genre_dummies <- model.matrix(~ genre - 1, data = spotify_data)
+genre_dummies <- as.data.frame(genre_dummies)
+spotify_data_nn <- select(spotify_data, -genre)
+spotify_data_nn <- cbind(spotify_data_nn, genre_dummies)
+spotify_data_nn$key <- as.numeric(as.character(spotify_data_nn$key))
+spotify_data_nn$mode <- as.numeric(as.character(spotify_data_nn$mode))
+spotify_data_nn$time_signature <- as.numeric(as.character(spotify_data_nn$time_signature))
+spotify_data_nn <- Filter(is.numeric, spotify_data_nn)
+spotify_data_scaled <- scale(spotify_data_nn)
+
+x_train <- as.matrix(spotify_data_scaled[train_idx, -which(colnames(spotify_data) == "danceability")])
+y_train <- spotify_data_scaled[train_idx, "danceability", drop = FALSE]
+
+x_test <- as.matrix(spotify_data_scaled[test_idx, -which(colnames(spotify_data) == "danceability")])
+y_test <- spotify_data_scaled[test_idx, "danceability", drop = FALSE]
+```
+
+```{r}
+p <- ncol(x_train)  # number of predictors
+
+model_nn <- keras_model_sequential() %>%
+  layer_dense(units = 10, activation = "relu", input_shape = c(p)) %>%
+  layer_dropout(rate = 0.4) %>%
+  layer_dense(units = 1)  # Output layer for regression
+
+summary(model_nn)
+```
+
+```{r}
+model_nn %>% compile(
+  loss = "mse",
+  optimizer = optimizer_rmsprop(),
+  metrics = list("mse")
+)
+```
+
+```{r}
+history <- model_nn %>% fit(
+  x_train,
+  y_train,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2
+)
+```
+
+```{r}
+performance <- model_nn %>% evaluate(x_test, y_test)
+print(performance)
+str(performance)
+```
+```{r}
+cat('Test MSE:', performance['mse'], '\n')
+```
+
 
 # Variable Selection
 
@@ -250,7 +656,7 @@ forward_stepwise_model <- regsubsets(formula, data=training_set, nbest=1, really
 forward_summary <- summary(forward_stepwise_model)
 
 #Plotting the results
-plot(forward_summary$cp, xlab="Number of Variables", ylab="Mallows' Cp", type="l", main="Forward Stepwise: Mallows' Cp")
+plot(forward_summary$cp, xlab="Number of Variables", ylab="Mallows' Cp", type="l", main="Forward Stepwise: Cp")
 plot(forward_summary$bic, xlab="Number of Variables", ylab="BIC", type="l", main="Forward Stepwise: BIC")
 
 best_model_forward_index <- which.min(forward_summary$bic)
@@ -265,7 +671,7 @@ backward_stepwise_model <- regsubsets(formula, data=training_set, nbest=1, reall
 backward_summary <- summary(backward_stepwise_model)
 
 #Plotting the results
-plot(backward_summary$cp, xlab="Number of Variables", ylab="Mallows' Cp", type="l", main="Backward Stepwise: Mallows' Cp")
+plot(backward_summary$cp, xlab="Number of Variables", ylab="Cp", type="l", main="Backward Stepwise: Mallows' Cp")
 plot(backward_summary$bic, xlab="Number of Variables", ylab="BIC", type="l", main="Backward Stepwise: BIC")
 
 #Identify best models by number of predictors based on BIC
@@ -276,6 +682,9 @@ cat("Best number of variables (Backward):", best_model_backward_index, "\n")
 ### Ridge Regression
 
 ```{r}
+all_levels <- unique(c(training_set$genre, test_set$genre))
+training_set$genre <- factor(training_set$genre, levels = all_levels)
+test_set$genre <- factor(test_set$genre, levels = all_levels)
 x_train <- model.matrix(danceability ~ ., data = training_set)[, -1]
 y_train <- training_set$danceability
 x_test <- model.matrix(danceability ~ ., data = test_set)[, -1]
@@ -283,21 +692,46 @@ y_test <- test_set$danceability
 ```
 
 ```{r}
-# Ridge regression with 10-fold CV to find optimal lambda
+#Ridge regression with 10-fold CV to find optimal lambda
 cv_ridge <- cv.glmnet(
   x_train,
   y_train,
-  alpha = 0,  # Alpha = 0 for Ridge regression
+  alpha = 0,  #Alpha = 0 for Ridge regression
   type.measure = "mse",
   nfolds = 10
 )
 
 optimal_lambda_ridge <- cv_ridge$lambda.min
+print(paste("Optimal Lambda for Ridge:", optimal_lambda_ridge))
+plot(cv_ridge)
+summary(cv_ridge)
+```
+
+```{r}
+#Perform 10-fold cross-validation for Ridge Regression
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+
+    optimal_lambda <- cv_ridge$lambda.min
+    predictions <- predict(cv_ridge, newx = x_train, s = optimal_lambda)
+
+    # Calculate MSE for the current fold and store it
+    MSE_k_fold <- rbind(MSE_k_fold, data.frame(fold = fld, ERR_i = mean((current_test_fold$danceability - predictions)^2)))
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
 predictions_ridge <- predict(cv_ridge, s = optimal_lambda_ridge, newx = x_test)
 mse_test_ridge <- mean((y_test - predictions_ridge)^2)
-
 print(paste("MSE for Ridge Regression:", mse_test_ridge))
-print(paste("Optimal Lambda for Ridge:", optimal_lambda_ridge))
 ```
 
 ### Lasso
@@ -312,11 +746,37 @@ cv_lasso <- cv.glmnet(
 )
 
 optimal_lambda_lasso <- cv_lasso$lambda.min
+print(paste("Optimal Lambda for Lasso:", optimal_lambda_lasso))
+
+plot(cv_lasso)
+summary(cv_lasso)
+```
+
+```{r}
+#Perform 10-fold cross-validation for Ridge Regression
+#Assign folds to data
+training_set$fold <- sample(rep(1:k, length.out = n_train))
+# Perform k-fold CV
+for (fld in 1:k) {
+
+    optimal_lambda_lasso <- cv_lasso$lambda.min
+    predictions <- predict(cv_lasso, newx = x_train, s = optimal_lambda_lasso)
+
+    # Calculate MSE for the current fold and store it
+    MSE_k_fold <- rbind(MSE_k_fold, data.frame(fold = fld, ERR_i = mean((current_test_fold$danceability - predictions)^2)))
+}
+training_set <- training_set %>% select(-fold)
+# Summarize the results
+MSE_k_fold_summary <- MSE_k_fold %>%
+  summarize(mean_MSE = mean(ERR_i, na.rm = TRUE))
+
+print(MSE_k_fold_summary)
+```
+
+```{r}
 predictions_lasso <- predict(cv_lasso, s = optimal_lambda_lasso, newx = x_test)
 mse_test_lasso <- mean((y_test - predictions_lasso)^2)
-
 print(paste("MSE for Lasso Regression:", mse_test_lasso))
-print(paste("Optimal Lambda for Lasso:", optimal_lambda_lasso))
 ```
 
 ### PCR
@@ -324,16 +784,18 @@ print(paste("Optimal Lambda for Lasso:", optimal_lambda_lasso))
 ```{r}
 model_pcr <- pcr(tempo ~ ., data = training_set, scale = TRUE, validation = "CV")
 
-# Summary of cross-validation results
+#Summary of cross-validation results
 validation_summary <- summary(model_pcr)
 print(validation_summary$validation)
+plot(model_pcr)
 
-# Extracting and plotting MSE for each number of components
+#Extracting MSE for each number of components
 model_pcr_mse <- MSEP(model_pcr, estimate = "CV")$val %>%
   as_tibble() %>%
   pivot_longer(everything(), names_to = "Components", values_to = "CV_MSE") %>%
   mutate(Components = as.integer(row_number() - 1)) %>%
   select(Components, CV_MSE)
+
 
 print(model_pcr_mse)
 ```
